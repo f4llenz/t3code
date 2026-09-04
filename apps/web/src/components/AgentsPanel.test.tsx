@@ -184,6 +184,40 @@ describe("AgentsPanel scroll position", () => {
     }
   });
 
+  it("preserves an offset clamped by a smaller remounted viewport", async () => {
+    const document = installReactTestDom();
+    const container = document.createElement("div");
+    const { createRoot } = await import("react-dom/client");
+    const root = createRoot(container as unknown as Element);
+    const threadKey = "env:clamped-remount";
+
+    try {
+      await act(() =>
+        root.render(<AgentsPanel key={threadKey} threadKey={threadKey} model={ROSTER_MODEL} />),
+      );
+      const initialViewport = viewport(container);
+      initialViewport.scrollTop = 510;
+      initialViewport.dispatchEvent(new Event("scroll"));
+
+      await act(() => root.render(<div>Other panel state</div>));
+      await act(() =>
+        root.render(<AgentsPanel key={threadKey} threadKey={threadKey} model={ROSTER_MODEL} />),
+      );
+      const constrainedViewport = viewport(container);
+      constrainedViewport.scrollHeight = 700;
+      constrainedViewport.clientHeight = 300;
+      constrainedViewport.scrollTop = 400;
+
+      await act(() => root.render(<div>Original layout</div>));
+      await act(() =>
+        root.render(<AgentsPanel key={threadKey} threadKey={threadKey} model={ROSTER_MODEL} />),
+      );
+      expect(viewport(container).scrollTop).toBe(510);
+    } finally {
+      await act(() => root.unmount());
+    }
+  });
+
   it("does not rerender when capturing scroll", async () => {
     const document = installReactTestDom();
     const container = document.createElement("div");

@@ -543,9 +543,19 @@ export function AgentsPanel({
       return;
     }
 
-    viewport.scrollTop = agentsScrollTopByThreadKey.get(threadKey) ?? 0;
+    const restoredScrollTop = agentsScrollTopByThreadKey.get(threadKey) ?? 0;
+    viewport.scrollTop = restoredScrollTop;
 
     const captureScrollTop = () => {
+      const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      const savedScrollTop = agentsScrollTopByThreadKey.get(threadKey);
+      if (
+        savedScrollTop !== undefined &&
+        savedScrollTop > maxScrollTop &&
+        viewport.scrollTop === maxScrollTop
+      ) {
+        return;
+      }
       agentsScrollTopByThreadKey.set(threadKey, viewport.scrollTop);
     };
     viewport.addEventListener("scroll", captureScrollTop, { passive: true });

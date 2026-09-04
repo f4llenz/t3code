@@ -7,6 +7,8 @@ export class ReactTestNode {
   readonly tagName: string;
   readonly namespaceURI = "http://www.w3.org/1999/xhtml";
   readonly style = {};
+  clientHeight = 0;
+  scrollHeight = 0;
   scrollTop = 0;
   nodeValue: string | null = null;
   private readonly attributes = new Map<string, string>();
