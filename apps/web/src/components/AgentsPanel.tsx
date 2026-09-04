@@ -552,7 +552,7 @@ export function AgentsPanel({
       if (
         savedScrollTop !== undefined &&
         savedScrollTop > maxScrollTop &&
-        viewport.scrollTop === maxScrollTop
+        viewport.scrollTop >= maxScrollTop - 1
       ) {
         return;
       }

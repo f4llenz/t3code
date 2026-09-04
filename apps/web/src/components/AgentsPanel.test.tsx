@@ -206,7 +206,7 @@ describe("AgentsPanel scroll position", () => {
       const constrainedViewport = viewport(container);
       constrainedViewport.scrollHeight = 700;
       constrainedViewport.clientHeight = 300;
-      constrainedViewport.scrollTop = 400;
+      constrainedViewport.scrollTop = 399.5;
 
       await act(() => root.render(<div>Original layout</div>));
       await act(() =>
