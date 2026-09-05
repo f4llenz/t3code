@@ -995,7 +995,19 @@ describe("ProviderCommandReactor", () => {
         { threadId: "thread-1" },
       ]);
 
+      const releaseFirstSend = yield* Deferred.make<void>();
+      harness.sendTurn.mockImplementation((input: unknown) =>
+        ((input as { input: string }).input === "first"
+          ? Deferred.await(releaseFirstSend)
+          : Effect.void
+        ).pipe(Effect.as({ threadId, turnId: asTurnId("turn-1") })),
+      );
       yield* Deferred.succeed(releaseReadyDispatch, undefined);
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length >= 2));
+      yield* Effect.promise(() => harness.drain());
+      expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+
+      yield* Deferred.succeed(releaseFirstSend, undefined);
       yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 3));
       expect(
         harness.sendTurn.mock.calls.map(([input]) => (input as { input: string }).input),
