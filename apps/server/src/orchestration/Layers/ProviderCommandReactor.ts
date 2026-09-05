@@ -1459,11 +1459,14 @@ const make = Effect.gen(function* () {
         yield* queued ? send : Effect.forkScoped(send);
       });
 
-    if (!compactionLatches.has(event.payload.threadId)) {
-      return yield* startTurn(false);
-    }
     const threadId = event.payload.threadId;
     const previousTail = queuedTurnStartTails.get(threadId);
+    // A send that is still draining behind a settled compaction has no latch
+    // left to wait on, so a turn arriving now has to queue behind its tail to
+    // stay in submission order.
+    if (!compactionLatches.has(threadId) && previousTail === undefined) {
+      return yield* startTurn(false);
+    }
     const tail = yield* Deferred.make<void>();
     queuedTurnStartTails.set(threadId, tail);
     const awaitCompactionSettled: Effect.Effect<void> = Effect.suspend(() => {
