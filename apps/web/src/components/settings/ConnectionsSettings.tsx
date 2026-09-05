@@ -2207,7 +2207,12 @@ export function ConnectionsSettings() {
   // Shared by manual SSH submission and discovered-host selection.
   const connectSavedBackendSshTarget = useCallback(
     async (target: DesktopSshEnvironmentTarget) => {
-      setAddEnvironmentProgress({ mode: "ssh", host: target.alias, startedAtMs: Date.now() });
+      // A discovered-host pick already started the clock before resolving the alias.
+      setAddEnvironmentProgress((current) => ({
+        mode: "ssh",
+        host: target.alias,
+        startedAtMs: current?.startedAtMs ?? Date.now(),
+      }));
       setSavedBackendError(null);
       const result = await connectSshEnvironment({ target, label: "" });
       if (result._tag === "Failure") {
