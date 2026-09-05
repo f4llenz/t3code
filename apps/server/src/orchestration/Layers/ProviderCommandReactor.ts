@@ -351,6 +351,9 @@ const make = Effect.gen(function* () {
   // to be restored instead of failing; the message itself is already
   // persisted, so nothing here needs to survive a restart.
   const compactionLatches = new Map<ThreadId, Deferred.Deferred<void>>();
+  // Sends waiting on a compaction leave one at a time, each behind the send
+  // queued before it, so they reach the provider in the order they were sent.
+  const queuedTurnStartTails = new Map<ThreadId, Deferred.Deferred<void>>();
   const settleCompactionLatch = (threadId: ThreadId) =>
     Effect.suspend(() => {
       const latch = compactionLatches.get(threadId);
@@ -1428,43 +1431,65 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const startTurn = Effect.gen(function* () {
-      const sendTurnRequest = yield* buildSendTurnRequestForThread({
-        threadId: event.payload.threadId,
-        messageText: message.text,
-        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-        ...(event.payload.modelSelection !== undefined
-          ? { modelSelection: event.payload.modelSelection }
-          : {}),
-        interactionMode: event.payload.interactionMode,
-        createdAt: event.payload.createdAt,
-      }).pipe(
-        Effect.map(Option.some),
-        Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
-      );
+    const startTurn = (queued: boolean) =>
+      Effect.gen(function* () {
+        const sendTurnRequest = yield* buildSendTurnRequestForThread({
+          threadId: event.payload.threadId,
+          messageText: message.text,
+          ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+          ...(event.payload.modelSelection !== undefined
+            ? { modelSelection: event.payload.modelSelection }
+            : {}),
+          interactionMode: event.payload.interactionMode,
+          createdAt: event.payload.createdAt,
+        }).pipe(
+          Effect.map(Option.some),
+          Effect.catchCause((cause) =>
+            handleTurnStartFailure(cause).pipe(Effect.as(Option.none())),
+          ),
+        );
 
-      if (Option.isNone(sendTurnRequest)) {
-        return;
-      }
+        if (Option.isNone(sendTurnRequest)) {
+          return;
+        }
 
-      yield* providerService
-        .sendTurn(sendTurnRequest.value)
-        .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
-    });
+        const send = providerService
+          .sendTurn(sendTurnRequest.value)
+          .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure));
+        yield* queued ? send : Effect.forkScoped(send);
+      });
 
-    const compactionLatch = compactionLatches.get(event.payload.threadId);
-    if (compactionLatch === undefined) {
-      return yield* startTurn;
+    if (!compactionLatches.has(event.payload.threadId)) {
+      return yield* startTurn(false);
     }
-    yield* Deferred.await(compactionLatch).pipe(
-      Effect.andThen(resolveThreadShell(event.payload.threadId)),
+    const threadId = event.payload.threadId;
+    const previousTail = queuedTurnStartTails.get(threadId);
+    const tail = yield* Deferred.make<void>();
+    queuedTurnStartTails.set(threadId, tail);
+    const awaitCompactionSettled: Effect.Effect<void> = Effect.suspend(() => {
+      const latch = compactionLatches.get(threadId);
+      return latch === undefined
+        ? Effect.void
+        : Deferred.await(latch).pipe(Effect.andThen(awaitCompactionSettled));
+    });
+    yield* (previousTail === undefined ? Effect.void : Deferred.await(previousTail)).pipe(
+      Effect.andThen(awaitCompactionSettled),
+      Effect.andThen(resolveThreadShell(threadId)),
       Effect.flatMap((latestThread) =>
         latestThread?.session?.status === "stopped" || latestThread?.session?.status === "error"
           ? appendTurnStartFailure(
               "Provider turn start failed",
               "The thread stopped before this message could be sent.",
             )
-          : startTurn,
+          : startTurn(true),
+      ),
+      Effect.ensuring(
+        Effect.suspend(() => {
+          if (queuedTurnStartTails.get(threadId) === tail) {
+            queuedTurnStartTails.delete(threadId);
+          }
+          return Deferred.succeed(tail, undefined);
+        }),
       ),
       Effect.forkScoped,
     );
