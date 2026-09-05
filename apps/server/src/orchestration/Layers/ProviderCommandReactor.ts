@@ -18,6 +18,7 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -345,7 +346,18 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
-  const compactingThreadIds = new Set<ThreadId>();
+  // A thread compacts outside any provider turn, so a message sent meanwhile
+  // has nothing to steer into. The latch lets that send wait for the session
+  // to be restored instead of failing; the message itself is already
+  // persisted, so nothing here needs to survive a restart.
+  const compactionLatches = new Map<ThreadId, Deferred.Deferred<void>>();
+  const settleCompactionLatch = (threadId: ThreadId) =>
+    Effect.suspend(() => {
+      const latch = compactionLatches.get(threadId);
+      if (latch === undefined) return Effect.void;
+      compactionLatches.delete(threadId);
+      return Deferred.succeed(latch, undefined).pipe(Effect.asVoid);
+    });
   const stoppingThreadIds = new Set<ThreadId>();
 
   const appendProviderFailureActivity = (input: {
@@ -449,7 +461,7 @@ const make = Effect.gen(function* () {
 
   const restoreCompaction = Effect.fnUntraced(function* (threadId: ThreadId, fromRunning = false) {
     if (stoppingThreadIds.has(threadId)) {
-      compactingThreadIds.delete(threadId);
+      yield* settleCompactionLatch(threadId);
       return;
     }
     const thread = yield* resolveThreadShell(threadId);
@@ -462,7 +474,7 @@ const make = Effect.gen(function* () {
       return;
     const completedAt = DateTime.formatIso(yield* DateTime.now);
     if (stoppingThreadIds.has(threadId)) {
-      compactingThreadIds.delete(threadId);
+      yield* settleCompactionLatch(threadId);
       return;
     }
     yield* setThreadSession({
@@ -1379,7 +1391,7 @@ const make = Effect.gen(function* () {
       }
       const latestThread = yield* resolveThreadShell(event.payload.threadId);
       if (
-        compactingThreadIds.has(event.payload.threadId) ||
+        compactionLatches.has(event.payload.threadId) ||
         latestThread?.session?.status === "starting" ||
         latestThread?.session?.status === "running"
       ) {
@@ -1389,7 +1401,7 @@ const make = Effect.gen(function* () {
         );
         return;
       }
-      compactingThreadIds.add(event.payload.threadId);
+      compactionLatches.set(event.payload.threadId, yield* Deferred.make<void>());
       yield* Effect.gen(function* () {
         yield* ensureSessionForThread(
           event.payload.threadId,
@@ -1410,38 +1422,52 @@ const make = Effect.gen(function* () {
       }).pipe(
         Effect.andThen(restoreCompaction(event.payload.threadId, true)),
         Effect.catchCause(recoverCompactionFailure),
-        Effect.ensuring(Effect.sync(() => void compactingThreadIds.delete(event.payload.threadId))),
+        Effect.ensuring(settleCompactionLatch(event.payload.threadId)),
         Effect.forkScoped,
       );
       return;
     }
-    if (compactingThreadIds.has(event.payload.threadId)) {
-      return yield* appendTurnStartFailure(
-        "Provider turn start failed",
-        "Wait for context compaction to finish before sending another message.",
+
+    const startTurn = Effect.gen(function* () {
+      const sendTurnRequest = yield* buildSendTurnRequestForThread({
+        threadId: event.payload.threadId,
+        messageText: message.text,
+        ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        interactionMode: event.payload.interactionMode,
+        createdAt: event.payload.createdAt,
+      }).pipe(
+        Effect.map(Option.some),
+        Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
       );
+
+      if (Option.isNone(sendTurnRequest)) {
+        return;
+      }
+
+      yield* providerService
+        .sendTurn(sendTurnRequest.value)
+        .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+    });
+
+    const compactionLatch = compactionLatches.get(event.payload.threadId);
+    if (compactionLatch === undefined) {
+      return yield* startTurn;
     }
-    const sendTurnRequest = yield* buildSendTurnRequestForThread({
-      threadId: event.payload.threadId,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
-      ...(event.payload.modelSelection !== undefined
-        ? { modelSelection: event.payload.modelSelection }
-        : {}),
-      interactionMode: event.payload.interactionMode,
-      createdAt: event.payload.createdAt,
-    }).pipe(
-      Effect.map(Option.some),
-      Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),
+    yield* Deferred.await(compactionLatch).pipe(
+      Effect.andThen(resolveThreadShell(event.payload.threadId)),
+      Effect.flatMap((latestThread) =>
+        latestThread?.session?.status === "stopped" || latestThread?.session?.status === "error"
+          ? appendTurnStartFailure(
+              "Provider turn start failed",
+              "The thread stopped before this message could be sent.",
+            )
+          : startTurn,
+      ),
+      Effect.forkScoped,
     );
-
-    if (Option.isNone(sendTurnRequest)) {
-      return;
-    }
-
-    yield* providerService
-      .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.asVoid, Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1636,7 +1662,7 @@ const make = Effect.gen(function* () {
     }
 
     const now = event.payload.createdAt;
-    const wasCompacting = compactingThreadIds.has(thread.id);
+    const wasCompacting = compactionLatches.has(thread.id);
     stoppingThreadIds.add(thread.id);
     const clearStopping = Effect.sync(() => void stoppingThreadIds.delete(thread.id));
     yield* (
@@ -1652,7 +1678,7 @@ const make = Effect.gen(function* () {
           const detail = formatFailureDetail(cause);
           return Effect.sync(() => {
             stoppingThreadIds.delete(thread.id);
-            return wasCompacting && !compactingThreadIds.has(thread.id);
+            return wasCompacting && !compactionLatches.has(thread.id);
           }).pipe(
             Effect.flatMap((compactionSettled) =>
               compactionSettled ? restoreCompaction(thread.id) : Effect.void,
