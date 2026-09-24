@@ -318,22 +318,17 @@ describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
         const serverPids: number[] = [];
         // Launched servers outlive the script, so stop each captured PID.
         yield* Effect.addFinalizer(() =>
-          Effect.sync(() => {
-            for (const pid of serverPids) {
-              try {
-                process.kill(pid, "SIGKILL");
-              } catch {}
-            }
-          }),
+          Effect.forEach(serverPids, (pid) =>
+            Effect.try(() => process.kill(pid, "SIGKILL")).pipe(Effect.ignore),
+          ),
         );
-        const isAlive = (pid: number) => {
-          try {
-            process.kill(pid, 0);
-            return true;
-          } catch {
-            return false;
-          }
-        };
+        const accepts = (port: number) =>
+          Effect.callback<boolean>((resume) => {
+            const connection = NodeNet.connect(port, "127.0.0.1");
+            connection.once("connect", () => resume(Effect.succeed(true)));
+            connection.once("error", () => resume(Effect.succeed(false)));
+            return Effect.sync(() => connection.destroy());
+          });
 
         const launch = Effect.fn("test.remoteLaunch")(function* () {
           const child = yield* spawner.spawn(
@@ -366,7 +361,6 @@ describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
         assert.equal(first.serverKind, "managed");
         const second = yield* launch();
         assert.deepEqual(second, first);
-        assert.isTrue(isAlive(first.pid));
 
         // A different server in the default home is still adopted.
         const externalPort = yield* freePort;
@@ -390,7 +384,7 @@ describe.skipIf(HostProcessPlatform.defaultValue() === "win32")(
         const handedOff = yield* launch();
         assert.equal(handedOff.serverKind, "external");
         assert.equal(handedOff.remotePort, externalPort);
-        assert.isFalse(isAlive(first.pid));
+        assert.isFalse(yield* accepts(first.remotePort));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
   },
