@@ -551,8 +551,8 @@ export function AgentsPanel({
     const viewport = viewportRef.current;
     if (!model.hasAgents || threadKey === null || viewport === null) return;
 
-    // A shorter layout clamps the restored offset. Keep the deeper target until the roster grows
-    // back to it or the user scrolls away from the bottom.
+    // A shorter layout, such as collapsed workflows after a remount, clamps the restored offset.
+    // Keep the deeper target until the roster grows back to it or the user takes over.
     let pendingScrollTop: number | null = rememberedScrollTops.get(threadKey) ?? 0;
     const restoreScrollTop = () => {
       if (pendingScrollTop === null) return;
@@ -565,17 +565,28 @@ export function AgentsPanel({
       pendingScrollTop = null;
       rememberScrollTop(threadKey, viewport.scrollTop);
     };
+    // Expanding a section must not jump the roster toward the pending target.
+    const keepCurrentScrollTop = () => {
+      if (pendingScrollTop === null) return;
+      pendingScrollTop = null;
+      rememberScrollTop(threadKey, viewport.scrollTop);
+    };
+    const intentEvents = ["pointerdown", "wheel", "touchstart", "keydown"] as const;
 
     restoreScrollTop();
     const resizeObserver = new ResizeObserver(restoreScrollTop);
     resizeObserver.observe(viewport);
     if (viewport.firstElementChild) resizeObserver.observe(viewport.firstElementChild);
     viewport.addEventListener("scroll", captureScrollTop, { passive: true });
+    for (const type of intentEvents) {
+      viewport.addEventListener(type, keepCurrentScrollTop, { passive: true });
+    }
     return () => {
       // The scroll listener already saved the live offset, and the viewport may be detached here.
       if (pendingScrollTop !== null) rememberScrollTop(threadKey, pendingScrollTop);
       resizeObserver.disconnect();
       viewport.removeEventListener("scroll", captureScrollTop);
+      for (const type of intentEvents) viewport.removeEventListener(type, keepCurrentScrollTop);
     };
   }, [model.hasAgents, threadKey]);
 

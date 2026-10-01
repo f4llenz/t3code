@@ -169,6 +169,22 @@ describe("AgentsPanel scroll position", () => {
     expect(viewport().scrollTop).toBe(200);
   });
 
+  it("stops following a clamped position once the user expands a section", async () => {
+    await showPanel("env:expanded");
+    scrollTo(510);
+    await hidePanel();
+
+    rosterHeight = 500;
+    await showPanel("env:expanded");
+    viewport().dispatchEvent(new Event("pointerdown"));
+    await resizeRoster(1000);
+    expect(viewport().scrollTop).toBe(200);
+
+    await hidePanel();
+    await showPanel("env:expanded");
+    expect(viewport().scrollTop).toBe(200);
+  });
+
   it("forgets the least recently visited thread after 100 others", async () => {
     await showPanel("env:evicted");
     scrollTo(300);
