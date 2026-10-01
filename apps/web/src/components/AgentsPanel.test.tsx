@@ -23,11 +23,47 @@ const EMPTY_MODEL: AgentPanelModel = {
 
 const ROSTER_MODEL: AgentPanelModel = { ...EMPTY_MODEL, hasAgents: true };
 
+// jsdom has no layout or animations. Model a 300px viewport that clamps scrollTop to the roster.
+const VIEWPORT_HEIGHT = 300;
+let rosterHeight = 1000;
+const scrollTops = new WeakMap<Element, number>();
+Object.defineProperties(Element.prototype, {
+  getAnimations: { configurable: true, value: () => [] },
+  clientHeight: { configurable: true, get: () => VIEWPORT_HEIGHT },
+  scrollHeight: { configurable: true, get: () => rosterHeight },
+  scrollTop: {
+    configurable: true,
+    get(this: Element) {
+      return scrollTops.get(this) ?? 0;
+    },
+    set(this: Element, value: number) {
+      scrollTops.set(
+        this,
+        Math.min(Math.max(0, value), Math.max(0, rosterHeight - VIEWPORT_HEIGHT)),
+      );
+    },
+  },
+});
+
+const resizeCallbacks = new Set<() => void>();
+class FakeResizeObserver {
+  constructor(private readonly callback: () => void) {}
+  observe() {
+    resizeCallbacks.add(this.callback);
+  }
+  unobserve() {}
+  disconnect() {
+    resizeCallbacks.delete(this.callback);
+  }
+}
+
 let root: Root;
 let container: HTMLDivElement;
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  rosterHeight = 1000;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -53,6 +89,11 @@ function viewport() {
   const element = container.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]');
   if (!element) throw new Error("Agents roster viewport was not rendered");
   return element;
+}
+
+async function resizeRoster(height: number) {
+  rosterHeight = height;
+  await act(async () => resizeCallbacks.forEach((callback) => callback()));
 }
 
 function scrollTo(scrollTop: number) {
@@ -91,15 +132,33 @@ describe("AgentsPanel scroll position", () => {
     scrollTo(510);
     await hidePanel();
 
+    rosterHeight = 700;
     await showPanel("env:clamped");
-    const shorter = viewport();
-    Object.defineProperty(shorter, "scrollHeight", { value: 700 });
-    Object.defineProperty(shorter, "clientHeight", { value: 300 });
-    scrollTo(399.5);
+    expect(viewport().scrollTop).toBe(400);
+    viewport().dispatchEvent(new Event("scroll"));
     await hidePanel();
 
+    rosterHeight = 1000;
     await showPanel("env:clamped");
     expect(viewport().scrollTop).toBe(510);
+  });
+
+  it("follows a clamped position as the roster grows until the user scrolls", async () => {
+    await showPanel("env:growing");
+    scrollTo(510);
+    await hidePanel();
+
+    rosterHeight = 700;
+    await showPanel("env:growing");
+    await resizeRoster(1000);
+    expect(viewport().scrollTop).toBe(510);
+
+    await hidePanel();
+    rosterHeight = 700;
+    await showPanel("env:growing");
+    scrollTo(200);
+    await resizeRoster(1000);
+    expect(viewport().scrollTop).toBe(200);
   });
 
   it("forgets the least recently visited thread after 100 others", async () => {

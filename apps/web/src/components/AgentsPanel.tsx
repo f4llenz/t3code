@@ -551,24 +551,29 @@ export function AgentsPanel({
     const viewport = viewportRef.current;
     if (!model.hasAgents || threadKey === null || viewport === null) return;
 
-    viewport.scrollTop = rememberedScrollTops.get(threadKey) ?? 0;
-
+    // A shorter layout clamps the restored offset. Keep the deeper target until the roster grows
+    // back to it or the user scrolls away from the bottom.
+    let pendingScrollTop: number | null = rememberedScrollTops.get(threadKey) ?? 0;
+    const restoreScrollTop = () => {
+      if (pendingScrollTop === null) return;
+      viewport.scrollTop = pendingScrollTop;
+      if (viewport.scrollTop >= pendingScrollTop - 1) pendingScrollTop = null;
+    };
     const captureScrollTop = () => {
-      // A shorter layout clamps the restored offset; keep the deeper one for the taller layout.
       const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
-      const remembered = rememberedScrollTops.get(threadKey);
-      if (
-        remembered !== undefined &&
-        remembered > maxScrollTop &&
-        viewport.scrollTop >= maxScrollTop - 1
-      ) {
-        return;
-      }
+      if (pendingScrollTop !== null && viewport.scrollTop >= maxScrollTop - 1) return;
+      pendingScrollTop = null;
       rememberScrollTop(threadKey, viewport.scrollTop);
     };
+
+    restoreScrollTop();
+    const resizeObserver = new ResizeObserver(restoreScrollTop);
+    resizeObserver.observe(viewport);
+    if (viewport.firstElementChild) resizeObserver.observe(viewport.firstElementChild);
     viewport.addEventListener("scroll", captureScrollTop, { passive: true });
     return () => {
-      captureScrollTop();
+      rememberScrollTop(threadKey, pendingScrollTop ?? viewport.scrollTop);
+      resizeObserver.disconnect();
       viewport.removeEventListener("scroll", captureScrollTop);
     };
   }, [model.hasAgents, threadKey]);
