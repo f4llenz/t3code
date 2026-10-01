@@ -1,8 +1,17 @@
+import {
+  ChatGptReconnectProfileInput,
+  ChatGptReconnectProfile,
+  ChatGptImportProfileInput,
+  ChatGptHandoffInput,
+  ChatGptHandoffState,
+} from "./providerSetup.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import { NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  CodexAuthCallbackInput,
+  CodexAuthCallbackState,
   ProviderAuthCancelInput,
   ProviderAuthCompleteInput,
   ProviderAuthState,
@@ -150,6 +159,7 @@ import {
   RelayClientStatusSchema,
 } from "./relayClient.ts";
 import {
+  ProjectEnsureScratchResult,
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
@@ -284,6 +294,7 @@ export const WS_METHODS = {
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
+  projectsEnsureScratch: "projects.ensureScratch",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -301,6 +312,10 @@ export const WS_METHODS = {
   providerAuthStart: "provider.auth.start",
   providerConsumeResetCredit: "provider.consumeResetCredit",
   providerAuthComplete: "provider.auth.complete",
+  chatGptReconnectProfile: "provider.chatgpt.reconnect-profile",
+  chatGptImportProfile: "provider.chatgpt.import-profile",
+  chatGptHandoffSubscribe: "provider.chatgpt.handoff.subscribe",
+  codexAuthCallbackSubscribe: "provider.codex.auth-callback.subscribe",
   providerAuthRespond: "provider.auth.respond",
   providerAuthCancel: "provider.auth.cancel",
   providerAuthLogout: "provider.auth.logout",
@@ -517,6 +532,29 @@ const WsProviderAuthCompleteRpc = Rpc.make(WS_METHODS.providerAuthComplete, {
   payload: ProviderAuthCompleteInput,
   success: ProviderAuthState,
   error: ProviderSetupRpcError,
+});
+
+const WsChatGptReconnectProfileRpc = Rpc.make(WS_METHODS.chatGptReconnectProfile, {
+  payload: ChatGptReconnectProfileInput,
+  success: Schema.NullOr(ChatGptReconnectProfile),
+  error: ProviderSetupRpcError,
+});
+const WsChatGptImportProfileRpc = Rpc.make(WS_METHODS.chatGptImportProfile, {
+  payload: ChatGptImportProfileInput,
+  success: ProviderAuthState,
+  error: ProviderSetupRpcError,
+});
+const WsChatGptHandoffSubscribeRpc = Rpc.make(WS_METHODS.chatGptHandoffSubscribe, {
+  payload: ChatGptHandoffInput,
+  success: ChatGptHandoffState,
+  error: ProviderSetupRpcError,
+  stream: true,
+});
+const WsCodexAuthCallbackSubscribeRpc = Rpc.make(WS_METHODS.codexAuthCallbackSubscribe, {
+  payload: CodexAuthCallbackInput,
+  success: CodexAuthCallbackState,
+  error: ProviderSetupRpcError,
+  stream: true,
 });
 
 const WsProviderAuthCancelRpc = Rpc.make(WS_METHODS.providerAuthCancel, {
@@ -953,6 +991,13 @@ const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
   error: Schema.Union([ProjectWriteFileError, EnvironmentAuthorizationError]),
+});
+
+// Finds or creates the Scratch project rooted at ServerConfig.scratchWorkspaceRoot.
+const WsProjectsEnsureScratchRpc = Rpc.make(WS_METHODS.projectsEnsureScratch, {
+  payload: Schema.Struct({}),
+  success: ProjectEnsureScratchResult,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
 
 const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
@@ -1399,6 +1444,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderConsumeResetCreditRpc,
   WsProviderAuthStartRpc,
   WsProviderAuthCompleteRpc,
+  WsChatGptReconnectProfileRpc,
+  WsChatGptImportProfileRpc,
+  WsChatGptHandoffSubscribeRpc,
+  WsCodexAuthCallbackSubscribeRpc,
   WsProviderAuthRespondRpc,
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,
@@ -1468,6 +1517,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
+  WsProjectsEnsureScratchRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
   WsFilesystemBrowseRpc,
