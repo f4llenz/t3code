@@ -23,7 +23,8 @@ const EMPTY_MODEL: AgentPanelModel = {
 
 const ROSTER_MODEL: AgentPanelModel = { ...EMPTY_MODEL, hasAgents: true };
 
-// jsdom has no layout or animations. Model a 300px viewport that clamps scrollTop to the roster.
+// jsdom has no layout or animations. Model a 300px viewport that clamps scrollTop to the roster,
+// reports whole pixels like a scaled display, and reads 0 once detached.
 const VIEWPORT_HEIGHT = 300;
 let rosterHeight = 1000;
 const scrollTops = new WeakMap<Element, number>();
@@ -34,13 +35,11 @@ Object.defineProperties(Element.prototype, {
   scrollTop: {
     configurable: true,
     get(this: Element) {
-      return scrollTops.get(this) ?? 0;
+      return this.isConnected ? (scrollTops.get(this) ?? 0) : 0;
     },
     set(this: Element, value: number) {
-      scrollTops.set(
-        this,
-        Math.min(Math.max(0, value), Math.max(0, rosterHeight - VIEWPORT_HEIGHT)),
-      );
+      const maxScrollTop = Math.max(0, rosterHeight - VIEWPORT_HEIGHT);
+      scrollTops.set(this, Math.floor(Math.min(Math.max(0, value), maxScrollTop)));
     },
   },
 });
@@ -132,15 +131,24 @@ describe("AgentsPanel scroll position", () => {
     scrollTo(510);
     await hidePanel();
 
-    rosterHeight = 700;
+    rosterHeight = 699.5;
     await showPanel("env:clamped");
-    expect(viewport().scrollTop).toBe(400);
+    expect(viewport().scrollTop).toBe(399);
     viewport().dispatchEvent(new Event("scroll"));
     await hidePanel();
 
     rosterHeight = 1000;
     await showPanel("env:clamped");
     expect(viewport().scrollTop).toBe(510);
+  });
+
+  it("keeps the position when the roster empties without unmounting", async () => {
+    await showPanel("env:emptied");
+    scrollTo(420);
+
+    await showPanel("env:emptied", EMPTY_MODEL);
+    await showPanel("env:emptied");
+    expect(viewport().scrollTop).toBe(420);
   });
 
   it("follows a clamped position as the roster grows until the user scrolls", async () => {

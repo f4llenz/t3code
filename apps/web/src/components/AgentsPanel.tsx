@@ -572,7 +572,8 @@ export function AgentsPanel({
     if (viewport.firstElementChild) resizeObserver.observe(viewport.firstElementChild);
     viewport.addEventListener("scroll", captureScrollTop, { passive: true });
     return () => {
-      rememberScrollTop(threadKey, pendingScrollTop ?? viewport.scrollTop);
+      // The scroll listener already saved the live offset, and the viewport may be detached here.
+      if (pendingScrollTop !== null) rememberScrollTop(threadKey, pendingScrollTop);
       resizeObserver.disconnect();
       viewport.removeEventListener("scroll", captureScrollTop);
     };
