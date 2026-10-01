@@ -22,7 +22,7 @@ import {
 } from "@t3tools/client-runtime/state/subagentRuntime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { Bot, Braces, Check, ChevronDown, ChevronRight, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { orchestrationEnvironment } from "~/state/orchestration";
@@ -521,15 +521,58 @@ function WorkflowSection({
   );
 }
 
+// Scoped thread keys keep separate environments independent. Bound the session cache.
+const rememberedScrollTops = new Map<string, number>();
+
+function rememberScrollTop(threadKey: string, scrollTop: number) {
+  rememberedScrollTops.delete(threadKey);
+  rememberedScrollTops.set(threadKey, scrollTop);
+  if (rememberedScrollTops.size > 100) {
+    const oldest = rememberedScrollTops.keys().next().value;
+    if (oldest !== undefined) rememberedScrollTops.delete(oldest);
+  }
+}
+
+/** Key by `threadKey` so each thread gets its own panel lifetime and scroll position. */
 export function AgentsPanel({
   model,
+  threadKey,
   environmentId = null,
   threadId = null,
 }: {
   model: AgentPanelModel;
+  threadKey: string | null;
   environmentId?: EnvironmentId | null;
   threadId?: ThreadId | null;
 }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!model.hasAgents || threadKey === null || viewport === null) return;
+
+    viewport.scrollTop = rememberedScrollTops.get(threadKey) ?? 0;
+
+    const captureScrollTop = () => {
+      // A shorter layout clamps the restored offset; keep the deeper one for the taller layout.
+      const maxScrollTop = Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+      const remembered = rememberedScrollTops.get(threadKey);
+      if (
+        remembered !== undefined &&
+        remembered > maxScrollTop &&
+        viewport.scrollTop >= maxScrollTop - 1
+      ) {
+        return;
+      }
+      rememberScrollTop(threadKey, viewport.scrollTop);
+    };
+    viewport.addEventListener("scroll", captureScrollTop, { passive: true });
+    return () => {
+      captureScrollTop();
+      viewport.removeEventListener("scroll", captureScrollTop);
+    };
+  }, [model.hasAgents, threadKey]);
+
   if (!model.hasAgents) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
@@ -545,7 +588,7 @@ export function AgentsPanel({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" viewportRef={viewportRef}>
         <div className="flex flex-col gap-2 p-2">
           {model.workflows.map((group) => (
             <WorkflowSection
