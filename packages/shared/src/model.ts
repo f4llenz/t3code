@@ -485,6 +485,20 @@ export function createModelSelection(
 }
 
 /**
+ * The selection a model picker pick produces, starting the picked model from
+ * `options` (for example its remembered options). Returns null when the pick
+ * changes nothing.
+ */
+export function resolveModelPick(
+  _current: ModelSelection | null | undefined,
+  instanceId: ProviderInstanceId,
+  model: string,
+  options?: ReadonlyArray<ProviderOptionSelection> | null,
+): ModelSelection | null {
+  return createModelSelection(instanceId, model, options);
+}
+
+/**
  * Returns the effort value if it is a prompt-injected value according to
  * any select descriptor in the given capabilities, or null otherwise.
  *
