@@ -487,14 +487,16 @@ export function createModelSelection(
 /**
  * The selection a model picker pick produces, starting the picked model from
  * `options` (for example its remembered options). Returns null when the pick
- * changes nothing.
+ * names the current instance and model, so confirming the model already in use
+ * keeps the options it runs with.
  */
 export function resolveModelPick(
-  _current: ModelSelection | null | undefined,
+  current: ModelSelection | null | undefined,
   instanceId: ProviderInstanceId,
   model: string,
   options?: ReadonlyArray<ProviderOptionSelection> | null,
 ): ModelSelection | null {
+  if (current?.instanceId === instanceId && current.model === model) return null;
   return createModelSelection(instanceId, model, options);
 }
 
