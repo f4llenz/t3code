@@ -884,7 +884,7 @@ describe("ClaudeAdapterV2 context usage", () => {
         cache_read_input_tokens: 5_000,
         output_tokens: 1_000,
       },
-      CLAUDE_TEST_MODEL_SELECTION,
+      200_000,
       "2026-08-29T00:00:00.000Z",
     );
 
